@@ -169,7 +169,7 @@ function unsubscribeFromRelay(psub, relayUrl) {
   relayQueue.push(relayUrl);
 
   // remove from global pubkey+relay=psub table
-  const pr = pubkey + relayUrl;
+  const pr = psub.pubkey + relayUrl;
   const psubs = sourcePsubs.get(pr).filter(pi => pi != psub.id);
   if (psubs.length > 0)
     sourcePsubs.set(pr, psubs);
@@ -309,13 +309,13 @@ function processRelayQueue() {
 
     // first handle the unsubs
     for (const p of new Set(r.unsubQueue).values()) {
-      // a sub id matching this pubkey on this relay
+      // a NDK sub id matching this pubkey on this relay
       const subId = r.pubkeySubs.get(p);
-      // unmap pubkey from sub id
+      // unmap pubkey from NDK sub id
       r.pubkeySubs.delete(p);
-      // get the sub by id
+      // get the NDK sub by id
       const sub = r.subs.get(subId);
-      // put back all sub pubkeys except the removed ones
+      // put back all NDK sub's pubkeys except the removed ones
       r.subQueue.push(...sub.pubkeys
         .filter(sp => !r.unsubQueue.includes(sp)));
       // mark this sub for closure
@@ -324,12 +324,14 @@ function processRelayQueue() {
       // it's now owned by the closeQueue
       r.subs.delete(subId);
     }
+    // clear the queue
+    r.unsubQueue = []
 
-    // now create new subs for new pubkeys and for old
-    // pubkeys from updates subs
+    // now create new NDK subs for new pubkeys and for old
+    // pubkeys from updated subs
     r.subQueue = [...new Set(r.subQueue).values()]
     while (r.subQueue.length > 0) {
-      // create a sub for the next batch of pubkeys
+      // create NDK sub for the next batch of pubkeys
       // from subQueue, and remove those pubkeys from subQueue
       const sub = createPubkeySub(r);
 
@@ -337,7 +339,7 @@ function processRelayQueue() {
       for (const p of sub.pubkeys)
         r.pubkeySubs.set(p, sub.subId);
 
-      // store sub itself
+      // store NDK sub itself
       r.subs.set(sub.subId, sub);
     }
   }
