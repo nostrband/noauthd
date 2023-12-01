@@ -1,0 +1,35 @@
+Noauth Daemon
+-------------
+
+Server for Noauth Nostr key manager.
+
+API:
+
+POST /subscribe({
+  npub: string, 
+  pushSubscription: json, // result of pushManager.subscribe
+  relays: string[] // which relays to watch for nip46 rpc
+})
+
+Server starts watching the relays for nip46 rpc and if it 
+detects that some requests don't have matching replies (signer 
+is sleeping) then it sends a push message to the signer. 
+Authorized using nip98.
+
+POST /put({
+  npub: string, 
+  data: string, // encrypted nsec
+  pwh: string // password hash 
+})
+
+Server stores this data and will serve it back later 
+with /get. Authorized using nip98.
+
+POST /get({
+  npub: string,
+  pwh: string // password hash
+})
+
+Server will return the data previously saved by /put,
+pwh must match the one provided to /put (no access
+to keys is needed).
