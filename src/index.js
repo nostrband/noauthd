@@ -108,8 +108,9 @@ function restartTimer(psub) {
   // crop max backoff
   pause = Math.min(pause, MAX_PAUSE);
 
-  // exclude the time we've already been silent
-  pause = pause - passed;
+  // exclude the time we've already been silent,
+  // but leave MIN_PAUSE for a normal reply!
+  pause = Math.max(pause - passed, MIN_PAUSE);
 
   psub.timer = setTimeout(async () => {
     psub.timer = undefined
