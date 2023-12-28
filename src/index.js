@@ -19,7 +19,8 @@ const port = 8000;
 const EMAIL = 'artur@nostr.band'; // admin email
 const MAX_RELAYS = 3; // no more than 3 relays monitored per pubkey
 const MAX_BATCH_SIZE = 500; // pubkeys per sub
-const MIN_PAUSE = 5000; // ms
+const MIN_PAUSE = 5000; // 5 ms
+const MAX_PAUSE = 3600000; // 1 hour
 const MAX_DATA = 1 << 10; // 1kb
 
 // global ndk
@@ -59,10 +60,15 @@ async function push(psub) {
     }));
   } catch (e) {
     console.log(new Date(), "push failed for", psub.pubkey, "code", e.statusCode, "headers", e.headers);
+
+    // reset
+    psub.lastPush = 0;
+
     switch (e.statusCode) {
       // 429	Too many requests. Meaning your application server has reached a rate limit with a push service. The push service should include a 'Retry-After' header to indicate how long before another request can be made.
       case 429:
         // FIXME mark psub as 'quite' until Retry-After
+        // FIXME use psub.lastPush for Retry-After
         break;
       // 400	Invalid request. This generally means one of your headers is invalid or improperly formatted.
       case 400:
@@ -79,6 +85,7 @@ async function push(psub) {
     }
   }
 
+  psub.lastPush = Date.now()
   return true;
 }
 
@@ -93,7 +100,17 @@ function restartTimer(psub) {
   if (psub.timer)
     clearTimeout(psub.timer);
 
-  const pause = psub.backoffMs ? psub.backoffMs : MIN_PAUSE;
+  const passed = Date.now() - psub.lastPush;
+
+  // backoff
+  let pause = psub.backoffMs ? psub.backoffMs : MIN_PAUSE;
+
+  // crop max backoff
+  pause = Math.min(pause, MAX_PAUSE);
+
+  // exclude the time we've already been silent
+  pause = pause - passed;
+
   psub.timer = setTimeout(async () => {
     psub.timer = undefined
     if (psub.pendingRequests > 0) {
@@ -427,6 +444,7 @@ async function addPsub(id, pubkey, pushSubscription, relays) {
       pendingRequests: 0,
       timer: undefined,
       backoffMs: 0,
+      lastPush: 0
     };
 
     console.log(new Date(), "sub created", pubkey, psub, relays)
