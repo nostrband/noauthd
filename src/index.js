@@ -5,7 +5,7 @@ const { createHash } = require('node:crypto');
 const express = require("express");
 const bodyParser = require('body-parser');
 const { nip19 } = require('nostr-tools')
-const { makePwh2 } = require('./crypto');
+const { makePwh2, countLeadingZeros } = require('./crypto');
 const { PrismaClient } = require('@prisma/client')
 
 const prisma = new PrismaClient()
@@ -335,7 +335,6 @@ function processRelayQueue() {
   for (const url of uniqRelays.values()) {
     const r = relays.get(url);
     console.log(new Date(), "update relay", url, "sub", r.subQueue.length, "unsub", r.unsubQueue.length);
-    console.log("old subs", r.subs, "unsubQueue", r.unsubQueue, "subQueue", r.subQueue)
 
     // first handle the unsubs
     for (const p of new Set(r.unsubQueue).values()) {
@@ -372,7 +371,6 @@ function processRelayQueue() {
       // store NDK sub itself
       r.subs.set(sub.subId, sub);
     }
-    console.log("new subs", r.subs)
   }
 
   // close old subs after new subs have activated
@@ -396,8 +394,23 @@ function digest(algo, data) {
   return hash.digest('hex');
 }
 
+function isValidName(name) {
+  const REGEX = /^[a-z0-9_]{3,128}$/
+  return REGEX.test(name)
+}
+
+function getMinPow(name, req) {
+  let minPow = 14
+  if (name.length <= 6) {
+    minPow += 4
+  }
+  // FIXME check IP rate limits
+
+  return minPow
+}
+
 // nip98
-async function verifyAuthNostr(req, npub, path) {
+async function verifyAuthNostr(req, npub, path, minPow = 0) {
   try {
     const { type, data: pubkey } = nip19.decode(npub);
     if (type !== 'npub') return false;
@@ -416,10 +429,15 @@ async function verifyAuthNostr(req, npub, path) {
     if (event.pubkey !== pubkey) return false;
     if (event.kind !== 27235) return false;
     if (event.created_at < (now - 60) || event.created_at > (now + 60)) return false;
+
+    const pow = countLeadingZeros(event.id);
+    console.log("pow", pow, "min", minPow, "id", event.id);
+    if (minPow && pow < minPow) return false;
+
     const u = event.tags.find(t => t.length === 2 && t[0] === 'u')?.[1]
     const method = event.tags.find(t => t.length === 2 && t[0] === 'method')?.[1]
     const payload = event.tags.find(t => t.length === 2 && t[0] === 'payload')?.[1]
-    // console.log({ u, method, payload })
+    if (method !== req.method) return false;
 
     const url = new URL(u)
     // console.log({ url })
@@ -645,6 +663,101 @@ app.post(GET_PATH, async (req, res) => {
       .send({
         data: d.data
       });
+  } catch (e) {
+    console.log(new Date(), "error req from ", req.ip, e.toString())
+    res.status(400).send({
+      "error": e.toString()
+    });
+  }
+})
+
+const NAME_PATH = '/name'
+app.post(NAME_PATH, async (req, res) => {
+  try {
+    const { npub, name } = req.body;
+
+    if (!isValidName(name)) {
+      console.log("invalid name", name)
+      res.status(400).send({
+        error: `Bad name`
+      })
+      return
+    }
+
+    const { type } = nip19.decode(npub);
+    if (type !== 'npub') {
+      console.log("bad npub", npub)
+      res.status(400).send({
+        error: 'Bad npub'
+      })
+      return
+    }
+
+    const minPow = getMinPow(name, req)
+
+    if (!await verifyAuthNostr(req, npub, NAME_PATH, minPow)) {
+      console.log("auth failed", npub)
+      res.status(403).send({
+        error: `Bad auth`,
+        minPow
+      })
+      return
+    }
+
+    try {
+      const dbr = await prisma.names.create({
+        data: {
+          npub,
+          name,
+          timestamp: Date.now()
+        }
+      });
+      console.log({ dbr });
+    } catch (e) {
+      res.status(400).send({
+        error: 'Name taken'
+      })
+      return
+    }
+
+    // reply ok
+    res
+      .status(201)
+      .send({
+        ok: true
+      });
+  } catch (e) {
+    console.log(new Date(), "error req from ", req.ip, e.toString())
+    res.status(400).send({
+      error: "Internal error"
+    });
+  }
+})
+
+const JSON_PATH = '/.well-known/nostr.json'
+app.get(JSON_PATH, async (req, res) => {
+  try {
+    const { name } = req.query;
+    const rec = await prisma.names.findUnique({
+      where: {
+        name
+      }
+    })
+    console.log("name", name, rec);
+
+    const data = {
+      names: {
+      }
+    }
+    if (rec) {
+      const { data: pubkey } = nip19.decode(rec.npub)
+      data.names[rec.name] = pubkey
+    }
+
+    res
+      .status(200)
+      .send(data);
+
   } catch (e) {
     console.log(new Date(), "error req from ", req.ip, e.toString())
     res.status(400).send({
