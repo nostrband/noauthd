@@ -557,7 +557,7 @@ app.post(SUBSCRIBE_PATH, async (req, res) => {
   } catch (e) {
     console.log(new Date(), "error req from ", req.ip, e.toString())
     res.status(400).send({
-      "error": e.toString()
+      error: "Internal error"
     });
   }
 })
@@ -615,7 +615,7 @@ app.post(PUT_PATH, async (req, res) => {
   } catch (e) {
     console.log(new Date(), "error req from ", req.ip, e.toString())
     res.status(400).send({
-      "error": e.toString()
+      error: "Internal error"
     });
   }
 })
@@ -666,7 +666,7 @@ app.post(GET_PATH, async (req, res) => {
   } catch (e) {
     console.log(new Date(), "error req from ", req.ip, e.toString())
     res.status(400).send({
-      "error": e.toString()
+      error: "Internal error"
     });
   }
 })
@@ -737,7 +737,20 @@ app.post(NAME_PATH, async (req, res) => {
 const JSON_PATH = '/.well-known/nostr.json'
 app.get(JSON_PATH, async (req, res) => {
   try {
+
+    const data = {
+      names: {
+      }
+    }
+
     const { name } = req.query;
+    if (!name) {
+      res
+      .status(200)
+      .send(data);
+      return;
+    }
+
     const rec = await prisma.names.findUnique({
       where: {
         name
@@ -745,10 +758,6 @@ app.get(JSON_PATH, async (req, res) => {
     })
     console.log("name", name, rec);
 
-    const data = {
-      names: {
-      }
-    }
     if (rec) {
       const { data: pubkey } = nip19.decode(rec.npub)
       data.names[rec.name] = pubkey
@@ -761,7 +770,7 @@ app.get(JSON_PATH, async (req, res) => {
   } catch (e) {
     console.log(new Date(), "error req from ", req.ip, e.toString())
     res.status(400).send({
-      "error": e.toString()
+      error: "Internal error"
     });
   }
 })
