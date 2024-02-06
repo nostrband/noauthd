@@ -4,7 +4,7 @@ const { default: NDK, NDKRelaySet, NDKRelay } = require('@nostr-dev-kit/ndk')
 const { createHash } = require('node:crypto');
 const express = require("express");
 const bodyParser = require('body-parser');
-const { nip19 } = require('nostr-tools')
+const { nip19, getPublicKey } = require('nostr-tools')
 const { makePwh2, countLeadingZeros } = require('./crypto');
 const { PrismaClient } = require('@prisma/client')
 
@@ -13,6 +13,8 @@ const prisma = new PrismaClient()
 // generate your own keypair with "web-push generate-vapid-keys"
 const PUSH_PUBKEY = process.env.PUSH_PUBKEY;
 const PUSH_SECKEY = process.env.PUSH_SECRET;
+const BUNKER_NSEC = process.env.BUNKER_NSEC;
+const BUNKER_RELAY = process.env.BUNKER_RELAY;
 
 // settings
 const port = 8000;
@@ -738,10 +740,17 @@ const JSON_PATH = '/.well-known/nostr.json'
 app.get(JSON_PATH, async (req, res) => {
   try {
 
+    const { data: bunkerNsec } = nip19.decode(BUNKER_NSEC)
+    const bunkerPubkey = getPublicKey(bunkerNsec);
+
     const data = {
       names: {
+        "_": bunkerPubkey
+      },
+      nip46: {
       }
     }
+    data.nip46[bunkerPubkey] = [BUNKER_RELAY];
 
     const { name } = req.query;
     if (!name) {
