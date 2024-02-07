@@ -730,7 +730,40 @@ app.post(NAME_PATH, async (req, res) => {
       });
   } catch (e) {
     console.log(new Date(), "error req from ", req.ip, e.toString())
-    res.status(400).send({
+    res.status(500).send({
+      error: "Internal error"
+    });
+  }
+})
+
+app.get(NAME_PATH, async (req, res) => {
+  try {
+    const { npub } = req.query;
+    if (!npub) {
+      res
+      .status(400)
+      .send({ error: "Specify npub" });
+      return;
+    }
+
+    const recs = await prisma.names.findMany({
+      where: {
+        npub
+      }
+    })
+    console.log("npub", npub, recs);
+
+    const data = {
+      names: recs.map(r => r.name)
+    }
+
+    res
+      .status(200)
+      .send(data);
+
+  } catch (e) {
+    console.log(new Date(), "error req from ", req.ip, e.toString())
+    res.status(500).send({
       error: "Internal error"
     });
   }
@@ -778,7 +811,7 @@ app.get(JSON_PATH, async (req, res) => {
 
   } catch (e) {
     console.log(new Date(), "error req from ", req.ip, e.toString())
-    res.status(400).send({
+    res.status(500).send({
       error: "Internal error"
     });
   }

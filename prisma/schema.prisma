@@ -1,6 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -11,26 +8,28 @@ datasource db {
 }
 
 model PushSubs {
-  id    Int     @id @default(autoincrement())
-  pushId String  @unique
-  timestamp BigInt
-  npub  String
+  id               Int    @id @default(autoincrement())
+  pushId           String @unique
+  timestamp        BigInt
+  npub             String
   pushSubscription String
-  relays String 
+  relays           String
 }
 
 model NpubData {
-  id    Int     @id @default(autoincrement())
+  id        Int    @id @default(autoincrement())
   timestamp BigInt
-  npub  String @unique
-  data String
-  pwh2 String
-  salt String
+  npub      String @unique
+  data      String
+  pwh2      String
+  salt      String
 }
 
 model Names {
-  id    Int     @id @default(autoincrement())
-  name String  @unique
-  npub String
+  id        Int    @id @default(autoincrement())
+  name      String @unique
+  npub      String
   timestamp BigInt
+
+  @@index([npub])
 }
