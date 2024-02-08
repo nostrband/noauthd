@@ -1,24 +1,38 @@
-require("websocket-polyfill")
-const webpush = require('web-push');
-const { default: NDK, NDKRelaySet, NDKRelay } = require('@nostr-dev-kit/ndk')
-const { createHash } = require('node:crypto');
+require("websocket-polyfill");
+const webpush = require("web-push");
+const {
+  default: NDK,
+  NDKRelaySet,
+  NDKRelay,
+  NDKPrivateKeySigner,
+  NDKNip46Backend
+} = require("@nostr-dev-kit/ndk");
+const { createHash } = require("node:crypto");
 const express = require("express");
-const bodyParser = require('body-parser');
-const { nip19, getPublicKey } = require('nostr-tools')
-const { makePwh2, countLeadingZeros } = require('./crypto');
-const { PrismaClient } = require('@prisma/client')
+const bodyParser = require("body-parser");
+const { nip19, getPublicKey } = require("nostr-tools");
+const {
+  makePwh2,
+  countLeadingZeros,
+  getCreateAccountToken,
+} = require("./crypto");
+const { PrismaClient } = require("@prisma/client");
 
-const prisma = new PrismaClient()
+global.crypto = require("node:crypto");
+
+const prisma = new PrismaClient();
 
 // generate your own keypair with "web-push generate-vapid-keys"
 const PUSH_PUBKEY = process.env.PUSH_PUBKEY;
 const PUSH_SECKEY = process.env.PUSH_SECRET;
 const BUNKER_NSEC = process.env.BUNKER_NSEC;
 const BUNKER_RELAY = process.env.BUNKER_RELAY;
+const BUNKER_ORIGIN = process.env.BUNKER_ORIGIN;
+const BUNKER_DOMAIN = process.env.BUNKER_DOMAIN;
 
 // settings
 const port = 8000;
-const EMAIL = 'artur@nostr.band'; // admin email
+const EMAIL = "artur@nostr.band"; // admin email
 const MAX_RELAYS = 3; // no more than 3 relays monitored per pubkey
 const MAX_BATCH_SIZE = 500; // pubkeys per sub
 const MIN_PAUSE = 5000; // 5 ms
@@ -27,7 +41,8 @@ const MAX_DATA = 1 << 10; // 1kb
 
 // global ndk
 const ndk = new NDK({
-  enableOutboxModel: false
+  enableOutboxModel: false,
+  explicitRelayUrls: [BUNKER_RELAY],
 });
 
 // set application/json middleware
@@ -35,33 +50,53 @@ const app = express();
 //app.use(express.json());
 
 // our identity for the push servers
-webpush.setVapidDetails(
-  `mailto:${EMAIL}`,
-  PUSH_PUBKEY,
-  PUSH_SECKEY
-);
+webpush.setVapidDetails(`mailto:${EMAIL}`, PUSH_PUBKEY, PUSH_SECKEY);
 
 // subs - npub:state
-const relays = new Map()
+const relays = new Map();
 const pushSubs = new Map();
 const sourcePsubs = new Map();
-const relayQueue = []
-const npubData = new Map()
+const relayQueue = [];
+const npubData = new Map();
+const bunkerTokens = new Map();
+
+let bunkerSigner = null;
 
 async function push(psub) {
-
-  console.log(new Date(), "push for", psub.pubkey, "psub", psub.id, "pending", psub.pendingRequests);
+  console.log(
+    new Date(),
+    "push for",
+    psub.pubkey,
+    "psub",
+    psub.id,
+    "pending",
+    psub.pendingRequests
+  );
   try {
-    await webpush.sendNotification(psub.pushSubscription, JSON.stringify({
-      cmd: 'wakeup',
-      pubkey: psub.pubkey
-    }, {
-      timeout: 3000,
-      TTL: 60, // don't store it for too long, it just needs to wakeup
-      urgency: 'high', // deliver immediately
-    }));
+    await webpush.sendNotification(
+      psub.pushSubscription,
+      JSON.stringify(
+        {
+          cmd: "wakeup",
+          pubkey: psub.pubkey,
+        },
+        {
+          timeout: 3000,
+          TTL: 60, // don't store it for too long, it just needs to wakeup
+          urgency: "high", // deliver immediately
+        }
+      )
+    );
   } catch (e) {
-    console.log(new Date(), "push failed for", psub.pubkey, "code", e.statusCode, "headers", e.headers);
+    console.log(
+      new Date(),
+      "push failed for",
+      psub.pubkey,
+      "code",
+      e.statusCode,
+      "headers",
+      e.headers
+    );
 
     // reset
     psub.lastPush = 0;
@@ -87,20 +122,19 @@ async function push(psub) {
     }
   }
 
-  psub.lastPush = Date.now()
+  psub.lastPush = Date.now();
   return true;
 }
 
 function clearTimer(psub) {
   if (psub.timer) {
-    clearTimeout(psub.timer)
-    psub.timer = undefined
+    clearTimeout(psub.timer);
+    psub.timer = undefined;
   }
 }
 
 function restartTimer(psub) {
-  if (psub.timer)
-    clearTimeout(psub.timer);
+  if (psub.timer) clearTimeout(psub.timer);
 
   const passed = Date.now() - psub.lastPush;
 
@@ -115,7 +149,7 @@ function restartTimer(psub) {
   pause = Math.max(pause - passed, MIN_PAUSE);
 
   psub.timer = setTimeout(async () => {
-    psub.timer = undefined
+    psub.timer = undefined;
     if (psub.pendingRequests > 0) {
       const ok = await push(psub);
       if (!ok) {
@@ -124,25 +158,23 @@ function restartTimer(psub) {
       }
 
       // logarithmic backoff to make sure
-      // we don't spam the push server if there is 
+      // we don't spam the push server if there is
       // a dead signer
       psub.backoffMs = (psub.backoffMs || MIN_PAUSE) * 2;
     }
 
     // clear
-    psub.pendingRequests = 0
-
-  }, pause)
+    psub.pendingRequests = 0;
+  }, pause);
 }
 
 function getP(e) {
-  return e.tags.find(t => t.length > 1 && t[0] === 'p')?.[1]
+  return e.tags.find((t) => t.length > 1 && t[0] === "p")?.[1];
 }
 
 function processRequest(r, e) {
   // ignore old requests in case relay sends them for some reason
-  if (e.created_at < (Date.now() / 1000 - 10))
-    return;
+  if (e.created_at < Date.now() / 1000 - 10) return;
 
   const pubkey = getP(e);
   const pr = pubkey + r.url;
@@ -151,8 +183,7 @@ function processRequest(r, e) {
   for (const id of psubs) {
     const psub = pushSubs.get(id);
     // start timer on first request
-    if (!psub.pendingRequests)
-      restartTimer(psub);
+    if (!psub.pendingRequests) restartTimer(psub);
     psub.pendingRequests++;
   }
 }
@@ -163,11 +194,15 @@ function processReply(r, e) {
 
   const pr = pubkey + r.url;
   const psubs = sourcePsubs.get(pr);
+  if (!psubs) {
+    console.log("skip unknown reply from", pubkey);
+    return;
+  }
   for (const id of psubs) {
     const psub = pushSubs.get(id);
 
     if (!psub.pendingRequests) {
-      console.log("skip unexpected reply from", pubkey)
+      console.log("skip unexpected reply from", pubkey);
       continue;
     }
     psub.pendingRequests--;
@@ -184,11 +219,17 @@ function processReply(r, e) {
 }
 
 function unsubscribeFromRelay(psub, relayUrl) {
-  console.log("unsubscribeunsubscribeFromRelay", psub.id, psub.pubkey, "from", relayUrl)
+  console.log(
+    "unsubscribeunsubscribeFromRelay",
+    psub.id,
+    psub.pubkey,
+    "from",
+    relayUrl
+  );
 
   // remove from global pubkey+relay=psub table
   const pr = psub.pubkey + relayUrl;
-  const psubs = sourcePsubs.get(pr).filter(pi => pi != psub.id);
+  const psubs = sourcePsubs.get(pr).filter((pi) => pi != psub.id);
   if (psubs.length > 0) {
     // still some other psub uses the same pubkey on this relay
     sourcePsubs.set(pr, psubs);
@@ -197,37 +238,37 @@ function unsubscribeFromRelay(psub, relayUrl) {
     const relay = relays.get(relayUrl);
     relay.unsubQueue.push(psub.pubkey);
     relayQueue.push(relayUrl);
-  
+
     sourcePsubs.delete(pr);
   }
 }
 
 function unsubscribe(psub) {
-  console.log("unsubscribe", psub.id, psub.pubkey)
+  console.log("unsubscribe", psub.id, psub.pubkey);
 
-  for (const url of psub.relays)
-    unsubscribeFromRelay(psub, url);
+  for (const url of psub.relays) unsubscribeFromRelay(psub, url);
 
-  pushSubs.delete(psub.id)
+  pushSubs.delete(psub.id);
 
   // drop from db
-  prisma.pushSubs.delete({
-    where: { pushId: psub.id }
-  }).then(r => console.log("deleted psub", psub.id, r));
+  prisma.pushSubs
+    .delete({
+      where: { pushId: psub.id },
+    })
+    .then((r) => console.log("deleted psub", psub.id, r));
 }
 
 function subscribe(psub, relayUrls) {
-  const pubkey = psub.pubkey
-  const oldRelays = psub.relays.filter(r => !relayUrls.includes(r));
-  const newRelays = relayUrls.filter(r => !psub.relays.includes(r));
+  const pubkey = psub.pubkey;
+  const oldRelays = psub.relays.filter((r) => !relayUrls.includes(r));
+  const newRelays = relayUrls.filter((r) => !psub.relays.includes(r));
 
-  console.log({ oldRelays, newRelays })
+  console.log({ oldRelays, newRelays });
 
   // store
-  psub.relays = relayUrls
+  psub.relays = relayUrls;
 
-  for (const url of oldRelays)
-    unsubscribeFromRelay(psub, url);
+  for (const url of oldRelays) unsubscribeFromRelay(psub, url);
 
   for (const url of newRelays) {
     let relay = relays.get(url);
@@ -238,7 +279,7 @@ function subscribe(psub, relayUrls) {
         subQueue: [],
         subs: new Map(),
         pubkeySubs: new Map(),
-      }
+      };
       relays.set(url, relay);
     }
     relay.subQueue.push(pubkey);
@@ -253,31 +294,31 @@ function subscribe(psub, relayUrls) {
 }
 
 function ensureRelay(url) {
-  if (ndk.pool.relays.get(url)) return
+  if (ndk.pool.relays.get(url)) return;
 
-  const ndkRelay = new NDKRelay(url)
-  let first = true
-  ndkRelay.on('connect', () => {
+  const ndkRelay = new NDKRelay(url);
+  let first = true;
+  ndkRelay.on("connect", () => {
     if (first) {
-      first = false
-      return
+      first = false;
+      return;
     }
 
     // retry all existing subs
-    console.log(new Date(), "resubscribing to relay", url)
-    const r = relays.get(url)
+    console.log(new Date(), "resubscribing to relay", url);
+    const r = relays.get(url);
     for (const pubkey of r.pubkeySubs.keys()) {
-      r.unsubQueue.push(pubkey)
-      r.subQueue.push(pubkey)
+      r.unsubQueue.push(pubkey);
+      r.subQueue.push(pubkey);
     }
-    relayQueue.push(url)
-  })
+    relayQueue.push(url);
+  });
 
-  ndk.pool.addRelay(ndkRelay)
+  ndk.pool.addRelay(ndkRelay);
 }
 
 function createPubkeySub(r) {
-  ensureRelay(r.url)
+  ensureRelay(r.url);
 
   const batchSize = Math.min(r.subQueue.length, MAX_BATCH_SIZE);
   const pubkeys = [...new Set(r.subQueue.splice(0, batchSize))];
@@ -287,24 +328,24 @@ function createPubkeySub(r) {
     kinds: [24133],
     "#p": pubkeys,
     // older requests have likely expired
-    since
+    since,
   };
   const replyFilter = {
     kinds: [24133],
     authors: pubkeys,
-    since
+    since,
   };
 
   const sub = ndk.subscribe(
     [requestFilter, replyFilter],
     {
       closeOnEose: false,
-      subId: `pubkeys_${Date.now()}_${pubkeys.length}`
+      subId: `pubkeys_${Date.now()}_${pubkeys.length}`,
     },
     NDKRelaySet.fromRelayUrls([r.url], ndk),
-    /* autoStart */false
+    /* autoStart */ false
   );
-  sub.on('event', (e) => {
+  sub.on("event", (e) => {
     // console.log("event by ", e.pubkey, "to", getP(e));
     try {
       if (pubkeys.includes(e.pubkey)) {
@@ -313,9 +354,9 @@ function createPubkeySub(r) {
         processRequest(r, e);
       }
     } catch (err) {
-      console.log("error", err)
+      console.log("error", err);
     }
-  })
+  });
   sub.start();
 
   // set sub pubkeys
@@ -330,13 +371,20 @@ function processRelayQueue() {
   // take queue, clear it
   const uniqRelays = new Set(relayQueue);
   relayQueue.length = 0;
-  if (uniqRelays.size > 0)
-    console.log({ uniqRelays });
+  if (uniqRelays.size > 0) console.log({ uniqRelays });
 
   // process active relay queue
   for (const url of uniqRelays.values()) {
     const r = relays.get(url);
-    console.log(new Date(), "update relay", url, "sub", r.subQueue.length, "unsub", r.unsubQueue.length);
+    console.log(
+      new Date(),
+      "update relay",
+      url,
+      "sub",
+      r.subQueue.length,
+      "unsub",
+      r.unsubQueue.length
+    );
 
     // first handle the unsubs
     for (const p of new Set(r.unsubQueue).values()) {
@@ -347,8 +395,9 @@ function processRelayQueue() {
       // get the NDK sub by id
       const sub = r.subs.get(subId);
       // put back all NDK sub's pubkeys except the removed ones
-      r.subQueue.push(...sub.pubkeys
-        .filter(sp => !r.unsubQueue.includes(sp)));
+      r.subQueue.push(
+        ...sub.pubkeys.filter((sp) => !r.unsubQueue.includes(sp))
+      );
       // mark this sub for closure
       closeQueue.push(sub);
       // delete sub from relay's store,
@@ -356,19 +405,18 @@ function processRelayQueue() {
       r.subs.delete(subId);
     }
     // clear the queue
-    r.unsubQueue = []
+    r.unsubQueue = [];
 
     // now create new NDK subs for new pubkeys and for old
     // pubkeys from updated subs
-    r.subQueue = [...new Set(r.subQueue).values()]
+    r.subQueue = [...new Set(r.subQueue).values()];
     while (r.subQueue.length > 0) {
       // create NDK sub for the next batch of pubkeys
       // from subQueue, and remove those pubkeys from subQueue
       const sub = createPubkeySub(r);
 
       // map sub's pubkeys to subId
-      for (const p of sub.pubkeys)
-        r.pubkeySubs.set(p, sub.subId);
+      for (const p of sub.pubkeys) r.pubkeySubs.set(p, sub.subId);
 
       // store NDK sub itself
       r.subs.set(sub.subId, sub);
@@ -379,7 +427,7 @@ function processRelayQueue() {
   setTimeout(() => {
     for (const sub of closeQueue) {
       sub.stop();
-      console.log(new Date(), "closing sub", sub.subId)
+      console.log(new Date(), "closing sub", sub.subId);
     }
   }, 500);
 
@@ -393,34 +441,34 @@ setTimeout(processRelayQueue, 1000);
 function digest(algo, data) {
   const hash = createHash(algo);
   hash.update(data);
-  return hash.digest('hex');
+  return hash.digest("hex");
 }
 
 function isValidName(name) {
-  const REGEX = /^[a-z0-9_]{3,128}$/
-  return REGEX.test(name)
+  const REGEX = /^[a-z0-9_]{3,128}$/;
+  return REGEX.test(name);
 }
 
 function getMinPow(name, req) {
-  let minPow = 14
+  let minPow = 14;
   if (name.length <= 6) {
-    minPow += 4
+    minPow += 4;
   }
   // FIXME check IP rate limits
 
-  return minPow
+  return minPow;
 }
 
 // nip98
 async function verifyAuthNostr(req, npub, path, minPow = 0) {
   try {
     const { type, data: pubkey } = nip19.decode(npub);
-    if (type !== 'npub') return false;
+    if (type !== "npub") return false;
 
     const { authorization } = req.headers;
     //console.log("req authorization", pubkey, authorization);
     if (!authorization.startsWith("Nostr ")) return false;
-    const data = authorization.split(' ')[1].trim();
+    const data = authorization.split(" ")[1].trim();
     if (!data) return false;
 
     const json = atob(data);
@@ -430,34 +478,39 @@ async function verifyAuthNostr(req, npub, path, minPow = 0) {
     const now = Math.floor(Date.now() / 1000);
     if (event.pubkey !== pubkey) return false;
     if (event.kind !== 27235) return false;
-    if (event.created_at < (now - 60) || event.created_at > (now + 60)) return false;
+    if (event.created_at < now - 60 || event.created_at > now + 60)
+      return false;
 
     const pow = countLeadingZeros(event.id);
     console.log("pow", pow, "min", minPow, "id", event.id);
     if (minPow && pow < minPow) return false;
 
-    const u = event.tags.find(t => t.length === 2 && t[0] === 'u')?.[1]
-    const method = event.tags.find(t => t.length === 2 && t[0] === 'method')?.[1]
-    const payload = event.tags.find(t => t.length === 2 && t[0] === 'payload')?.[1]
+    const u = event.tags.find((t) => t.length === 2 && t[0] === "u")?.[1];
+    const method = event.tags.find(
+      (t) => t.length === 2 && t[0] === "method"
+    )?.[1];
+    const payload = event.tags.find(
+      (t) => t.length === 2 && t[0] === "payload"
+    )?.[1];
     if (method !== req.method) return false;
 
-    const url = new URL(u)
+    const url = new URL(u);
     // console.log({ url })
-    if (url.origin !== process.env.ORIGIN
-      || url.pathname !== path) return false
+    if (url.origin !== process.env.ORIGIN || url.pathname !== path)
+      return false;
 
     if (req.rawBody.length > 0) {
-      const hash = digest('sha256', req.rawBody.toString());
+      const hash = digest("sha256", req.rawBody.toString());
       // console.log({ hash, payload, body: req.rawBody.toString() })
       if (hash !== payload) return false;
     } else if (payload) {
       return false;
     }
 
-    return true
+    return true;
   } catch (e) {
-    console.log("auth error", e)
-    return false
+    console.log("auth error", e);
+    return false;
   }
 }
 
@@ -465,10 +518,8 @@ async function addPsub(id, pubkey, pushSubscription, relays) {
   let psub = pushSubs.get(id);
   if (psub) {
     psub.pushSubscription = pushSubscription;
-    console.log(new Date(), "sub updated", pubkey, psub, relays)
-
+    console.log(new Date(), "sub updated", pubkey, psub, relays);
   } else {
-
     // new sub for this id
     psub = {
       id,
@@ -478,10 +529,10 @@ async function addPsub(id, pubkey, pushSubscription, relays) {
       pendingRequests: 0,
       timer: undefined,
       backoffMs: 0,
-      lastPush: 0
+      lastPush: 0,
     };
 
-    console.log(new Date(), "sub created", pubkey, psub, relays)
+    console.log(new Date(), "sub created", pubkey, psub, relays);
   }
 
   // update relaySubs if needed
@@ -492,218 +543,240 @@ async function addPsub(id, pubkey, pushSubscription, relays) {
 }
 
 // json middleware that saves the original body for nip98 auth
-app.use(bodyParser.json({
-  verify: function (req, res, buf, encoding) {
-    req.rawBody = buf;
-  }
-}));
+app.use(
+  bodyParser.json({
+    verify: function (req, res, buf, encoding) {
+      req.rawBody = buf;
+    },
+  })
+);
 
 // CORS headers
 app.use(function (req, res, next) {
   res
-    .header('Access-Control-Allow-Origin', '*')
-    .header('Access-Control-Allow-Methods', 'GET, POST, PUT, OPTIONS')
-    .header('Access-Control-Allow-Headers', 'accept,content-type,x-requested-with,authorization')
-  next()
-})
+    .header("Access-Control-Allow-Origin", "*")
+    .header("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
+    .header(
+      "Access-Control-Allow-Headers",
+      "accept,content-type,x-requested-with,authorization"
+    );
+  next();
+});
 
-const SUBSCRIBE_PATH = '/subscribe'
+const SUBSCRIBE_PATH = "/subscribe";
 app.post(SUBSCRIBE_PATH, async (req, res) => {
   try {
     const { npub, pushSubscription, relays } = req.body;
 
-    if (!await verifyAuthNostr(req, npub, SUBSCRIBE_PATH)) {
-      console.log("auth failed", npub)
+    if (!(await verifyAuthNostr(req, npub, SUBSCRIBE_PATH))) {
+      console.log("auth failed", npub);
       res.status(403).send({
-        error: `Bad auth`
-      })
-      return
+        error: `Bad auth`,
+      });
+      return;
     }
 
     if (relays.length > MAX_RELAYS) {
-      console.log("too many relays", relays.length)
+      console.log("too many relays", relays.length);
       res.status(400).send({
-        error: `Too many relays, max ${MAX_RELAYS}`
-      })
-      return
+        error: `Too many relays, max ${MAX_RELAYS}`,
+      });
+      return;
     }
 
     const { data: pubkey } = nip19.decode(npub);
-    const id = digest('sha1', pubkey + pushSubscription.endpoint);
+    const id = digest("sha1", pubkey + pushSubscription.endpoint);
 
-    await addPsub(id, pubkey, pushSubscription, relays)
+    await addPsub(id, pubkey, pushSubscription, relays);
 
     // write to db w/o blocking the client
-    prisma.pushSubs.upsert({
-      where: { pushId: id },
-      create: {
-        pushId: id,
-        npub,
-        pushSubscription: JSON.stringify(pushSubscription),
-        relays: JSON.stringify(relays),
-        timestamp: Date.now()
-      },
-      update: {
-        pushSubscription: JSON.stringify(pushSubscription),
-        relays: JSON.stringify(relays),
-        timestamp: Date.now()
-      },
-    }).then((dbr) => console.log({ dbr }))
+    prisma.pushSubs
+      .upsert({
+        where: { pushId: id },
+        create: {
+          pushId: id,
+          npub,
+          pushSubscription: JSON.stringify(pushSubscription),
+          relays: JSON.stringify(relays),
+          timestamp: Date.now(),
+        },
+        update: {
+          pushSubscription: JSON.stringify(pushSubscription),
+          relays: JSON.stringify(relays),
+          timestamp: Date.now(),
+        },
+      })
+      .then((dbr) => console.log({ dbr }));
 
     // reply ok
-    res
-      .status(201)
-      .send({
-        ok: true
-      });
+    res.status(201).send({
+      ok: true,
+    });
   } catch (e) {
-    console.log(new Date(), "error req from ", req.ip, e.toString())
+    console.log(new Date(), "error req from ", req.ip, e.toString());
     res.status(400).send({
-      error: "Internal error"
+      error: "Internal error",
     });
   }
-})
+});
 
-const PUT_PATH = '/put'
+const PUT_PATH = "/put";
 app.post(PUT_PATH, async (req, res) => {
   try {
     const { npub, data, pwh } = req.body;
 
-    if (!await verifyAuthNostr(req, npub, PUT_PATH)) {
-      console.log("auth failed", npub)
+    if (!(await verifyAuthNostr(req, npub, PUT_PATH))) {
+      console.log("auth failed", npub);
       res.status(403).send({
-        error: `Bad auth`
-      })
-      return
+        error: `Bad auth`,
+      });
+      return;
     }
 
     if (data.length > MAX_DATA || pwh.length > MAX_DATA) {
-      console.log("data too long")
+      console.log("data too long");
       res.status(400).send({
-        error: `Data too long, max ${MAX_DATA}`
-      })
-      return
+        error: `Data too long, max ${MAX_DATA}`,
+      });
+      return;
     }
 
-    const start = Date.now()
-    const { pwh2, salt } = await makePwh2(pwh)
-    console.log(new Date(), "put", npub, data, pwh2, salt, "in", Date.now() - start, "ms")
-    npubData.set(npub, { data, pwh2, salt })
+    const start = Date.now();
+    const { pwh2, salt } = await makePwh2(pwh);
+    console.log(
+      new Date(),
+      "put",
+      npub,
+      data,
+      pwh2,
+      salt,
+      "in",
+      Date.now() - start,
+      "ms"
+    );
+    npubData.set(npub, { data, pwh2, salt });
 
     // write to db w/o blocking the client
-    prisma.npubData.upsert({
-      where: { npub },
-      create: {
-        npub,
-        data,
-        pwh2,
-        salt,
-        timestamp: Date.now()
-      },
-      update: {
-        data,
-        pwh2,
-        salt,
-        timestamp: Date.now()
-      },
-    }).then((dbr) => console.log({ dbr }))
+    prisma.npubData
+      .upsert({
+        where: { npub },
+        create: {
+          npub,
+          data,
+          pwh2,
+          salt,
+          timestamp: Date.now(),
+        },
+        update: {
+          data,
+          pwh2,
+          salt,
+          timestamp: Date.now(),
+        },
+      })
+      .then((dbr) => console.log({ dbr }));
 
     // reply ok
-    res
-      .status(201)
-      .send({
-        ok: true
-      });
+    res.status(201).send({
+      ok: true,
+    });
   } catch (e) {
-    console.log(new Date(), "error req from ", req.ip, e.toString())
+    console.log(new Date(), "error req from ", req.ip, e.toString());
     res.status(400).send({
-      error: "Internal error"
+      error: "Internal error",
     });
   }
-})
+});
 
-const GET_PATH = '/get'
+const GET_PATH = "/get";
 app.post(GET_PATH, async (req, res) => {
   try {
     const { npub, pwh } = req.body;
 
     const { type } = nip19.decode(npub);
-    if (type !== 'npub') {
-      console.log("bad npub", npub)
+    if (type !== "npub") {
+      console.log("bad npub", npub);
       res.status(400).send({
-        error: 'Bad npub'
-      })
-      return
+        error: "Bad npub",
+      });
+      return;
     }
 
-    const d = npubData.get(npub)
+    const d = npubData.get(npub);
     if (!d) {
-      console.log("no data for npub", npub)
+      console.log("no data for npub", npub);
       res.status(404).send({
-        error: 'Not found'
-      })
-      return
+        error: "Not found",
+      });
+      return;
     }
 
-    const start = Date.now()
-    const { pwh2 } = await makePwh2(pwh, Buffer.from(d.salt, 'hex'))
-    console.log(new Date(), "get", npub, pwh2, d.salt, "in", Date.now() - start, "ms")
+    const start = Date.now();
+    const { pwh2 } = await makePwh2(pwh, Buffer.from(d.salt, "hex"));
+    console.log(
+      new Date(),
+      "get",
+      npub,
+      pwh2,
+      d.salt,
+      "in",
+      Date.now() - start,
+      "ms"
+    );
 
     if (d.pwh2 !== pwh2) {
-      console.log("bad pwh npub", npub)
+      console.log("bad pwh npub", npub);
       res.status(403).send({
-        error: 'Forbidden'
-      })
-      return
+        error: "Forbidden",
+      });
+      return;
     }
 
-    console.log(new Date(), "get", npub, d.data)
+    console.log(new Date(), "get", npub, d.data);
 
     // reply ok
-    res
-      .status(200)
-      .send({
-        data: d.data
-      });
+    res.status(200).send({
+      data: d.data,
+    });
   } catch (e) {
-    console.log(new Date(), "error req from ", req.ip, e.toString())
+    console.log(new Date(), "error req from ", req.ip, e.toString());
     res.status(400).send({
-      error: "Internal error"
+      error: "Internal error",
     });
   }
-})
+});
 
-const NAME_PATH = '/name'
+const NAME_PATH = "/name";
 app.post(NAME_PATH, async (req, res) => {
   try {
     const { npub, name } = req.body;
 
     if (!isValidName(name)) {
-      console.log("invalid name", name)
+      console.log("invalid name", name);
       res.status(400).send({
-        error: `Bad name`
-      })
-      return
+        error: `Bad name`,
+      });
+      return;
     }
 
     const { type } = nip19.decode(npub);
-    if (type !== 'npub') {
-      console.log("bad npub", npub)
+    if (type !== "npub") {
+      console.log("bad npub", npub);
       res.status(400).send({
-        error: 'Bad npub'
-      })
-      return
+        error: "Bad npub",
+      });
+      return;
     }
 
-    const minPow = getMinPow(name, req)
+    const minPow = getMinPow(name, req);
 
-    if (!await verifyAuthNostr(req, npub, NAME_PATH, minPow)) {
-      console.log("auth failed", npub)
+    if (!(await verifyAuthNostr(req, npub, NAME_PATH, minPow))) {
+      console.log("auth failed", npub);
       res.status(403).send({
         error: `Bad auth`,
-        minPow
-      })
-      return
+        minPow,
+      });
+      return;
     }
 
     try {
@@ -711,141 +784,252 @@ app.post(NAME_PATH, async (req, res) => {
         data: {
           npub,
           name,
-          timestamp: Date.now()
-        }
+          timestamp: Date.now(),
+        },
       });
       console.log({ dbr });
     } catch (e) {
       res.status(400).send({
-        error: 'Name taken'
-      })
-      return
+        error: "Name taken",
+      });
+      return;
     }
 
     // reply ok
-    res
-      .status(201)
-      .send({
-        ok: true
-      });
+    res.status(201).send({
+      ok: true,
+    });
   } catch (e) {
-    console.log(new Date(), "error req from ", req.ip, e.toString())
+    console.log(new Date(), "error req from ", req.ip, e.toString());
     res.status(500).send({
-      error: "Internal error"
+      error: "Internal error",
     });
   }
-})
+});
 
 app.get(NAME_PATH, async (req, res) => {
   try {
     const { npub } = req.query;
     if (!npub) {
-      res
-      .status(400)
-      .send({ error: "Specify npub" });
+      res.status(400).send({ error: "Specify npub" });
       return;
     }
 
     const recs = await prisma.names.findMany({
       where: {
-        npub
-      }
-    })
+        npub,
+      },
+    });
     console.log("npub", npub, recs);
 
     const data = {
-      names: recs.map(r => r.name)
-    }
+      names: recs.map((r) => r.name),
+    };
 
-    res
-      .status(200)
-      .send(data);
-
+    res.status(200).send(data);
   } catch (e) {
-    console.log(new Date(), "error req from ", req.ip, e.toString())
+    console.log(new Date(), "error req from ", req.ip, e.toString());
     res.status(500).send({
-      error: "Internal error"
+      error: "Internal error",
     });
   }
-})
+});
 
-const JSON_PATH = '/.well-known/nostr.json'
+const JSON_PATH = "/.well-known/nostr.json";
 app.get(JSON_PATH, async (req, res) => {
   try {
-
-    const { data: bunkerNsec } = nip19.decode(BUNKER_NSEC)
+    const { data: bunkerNsec } = nip19.decode(BUNKER_NSEC);
     const bunkerPubkey = getPublicKey(bunkerNsec);
 
     const data = {
       names: {
-        "_": bunkerPubkey
+        _: bunkerPubkey,
       },
-      nip46: {
-      }
-    }
+      nip46: {},
+    };
     data.nip46[bunkerPubkey] = [BUNKER_RELAY];
 
     const { name } = req.query;
     if (!name) {
-      res
-      .status(200)
-      .send(data);
+      res.status(200).send(data);
       return;
     }
 
     const rec = await prisma.names.findUnique({
       where: {
-        name
-      }
-    })
+        name,
+      },
+    });
     console.log("name", name, rec);
 
     if (rec) {
-      const { data: pubkey } = nip19.decode(rec.npub)
-      data.names[rec.name] = pubkey
+      const { data: pubkey } = nip19.decode(rec.npub);
+      data.names[rec.name] = pubkey;
     }
 
-    res
-      .status(200)
-      .send(data);
-
+    res.status(200).send(data);
   } catch (e) {
-    console.log(new Date(), "error req from ", req.ip, e.toString())
+    console.log(new Date(), "error req from ", req.ip, e.toString());
     res.status(500).send({
-      error: "Internal error"
+      error: "Internal error",
     });
   }
-})
+});
+
+const CREATED_PATH = "/created";
+app.post(CREATED_PATH, async (req, res) => {
+  try {
+    const { npub, token } = req.body;
+
+    const { type, data: pubkey } = nip19.decode(npub);
+    if (type !== "npub") {
+      console.log("bad npub", npub);
+      res.status(400).send({
+        error: "Bad npub",
+      });
+      return;
+    }
+
+    const cb = bunkerTokens.get(token);
+    if (!cb) {
+      console.log("bad token", token, npub);
+      res.status(400).send({
+        error: "Bad token",
+      });
+      return;
+    }
+
+    if (!(await verifyAuthNostr(req, npub, CREATED_PATH))) {
+      console.log("auth failed", npub);
+      res.status(403).send({
+        error: `Bad auth`,
+        minPow,
+      });
+      return;
+    }
+
+    // redeem
+    bunkerTokens.delete(token);
+
+    // if cb throws we will inform the client
+    // that they should connect to the app manually
+    await cb(pubkey);
+
+    // reply ok
+    res.status(200).send({
+      ok: true,
+    });
+  } catch (e) {
+    console.log(new Date(), "error req from ", req.ip, e.toString());
+    res.status(500).send({
+      error: "Internal error",
+    });
+  }
+});
 
 async function loadFromDb() {
-  const start = Date.now()
+  const start = Date.now();
 
-  const psubs = await prisma.pushSubs.findMany()
+  const psubs = await prisma.pushSubs.findMany();
   for (const ps of psubs) {
-    const { type, data: pubkey } = nip19.decode(ps.npub)
-    if (type !== 'npub') continue
+    const { type, data: pubkey } = nip19.decode(ps.npub);
+    if (type !== "npub") continue;
     try {
-      await addPsub(ps.pushId, pubkey, JSON.parse(ps.pushSubscription), JSON.parse(ps.relays))
+      await addPsub(
+        ps.pushId,
+        pubkey,
+        JSON.parse(ps.pushSubscription),
+        JSON.parse(ps.relays)
+      );
     } catch (e) {
-      console.log("load error", e)
+      console.log("load error", e);
     }
   }
 
-  const datas = await prisma.npubData.findMany()
+  const datas = await prisma.npubData.findMany();
   for (const d of datas) {
-    npubData.set(d.npub, { 
-      data: d.data, 
-      pwh2: d.pwh2, 
-      salt: d.salt
-    })
+    npubData.set(d.npub, {
+      data: d.data,
+      pwh2: d.pwh2,
+      salt: d.salt,
+    });
   }
 
-  console.log("loaded from db in", Date.now() - start, "ms psubs", psubs.length, "datas", datas.length)
+  console.log(
+    "loaded from db in",
+    Date.now() - start,
+    "ms psubs",
+    psubs.length,
+    "datas",
+    datas.length
+  );
 }
 
-// start
+class CreateAccountHandlingStrategy {
+  constructor() {}
+
+  async handle(backend, id, remotePubkey, params) {
+    // generate token
+    const token = getCreateAccountToken();
+
+    // params
+    const [name = "", domain = ""] = params;
+
+    if (domain !== BUNKER_DOMAIN) throw new Error("Bad domain");
+
+    // format auth url
+    const url = `${BUNKER_ORIGIN}/create?name=${name}&token=${token}`;
+    console.log("sending auth_url", url, "to", remotePubkey);
+    await backend.rpc.sendResponse(
+      id,
+      remotePubkey,
+      "auth_url",
+      undefined,
+      url
+    );
+
+    // wait for token redeemal
+    const tokenPromise = new Promise((ok) => {
+      // will resolve if app redeems the token
+      bunkerTokens.set(token, ok);
+    });
+
+    // timeout to avoid
+    const timeoutPromise = new Promise((_, err) =>
+      setTimeout(() => {
+        // release memory
+        bunkerTokens.delete(token);
+
+        // throw
+        err("Timeout");
+      }, 60000)
+    );
+
+    // if tokenPromise resolves it returns the new pubkey
+    return await Promise.race([tokenPromise, timeoutPromise]);
+  }
+}
+
+async function startBunker() {
+  const { data: bunkerSk } = nip19.decode(BUNKER_NSEC);
+  bunkerSigner = new NDKNip46Backend(
+    ndk,
+    new NDKPrivateKeySigner(bunkerSk),
+    () => true
+  );
+  bunkerSigner.handlers = {
+    create_account: new CreateAccountHandlingStrategy(),
+  };
+  bunkerSigner.start();
+  console.log("starting bunker");
+}
+
+// start bunker 
+ndk.connect().then(startBunker);
+
+// start server
 loadFromDb().then(() => {
   app.listen(port, () => {
     console.log(`Listening on port ${port}!`);
-  });  
-})
+  });
+});

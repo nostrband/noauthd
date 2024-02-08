@@ -4,6 +4,11 @@ const ITERATIONS = 10000
 const SALT_SIZE = 16
 const HASH_SIZE = 32
 const HASH_ALGO = 'sha256'
+const TOKEN_SIZE = 16
+
+function getCreateAccountToken() {
+  return randomBytes(TOKEN_SIZE).toString('hex')
+}
 
 async function makePwh2(pwh, salt) {
   return new Promise((ok, fail) => {
@@ -33,5 +38,6 @@ function countLeadingZeros(hex) {
 
 module.exports = {
   makePwh2,
-  countLeadingZeros
+  countLeadingZeros,
+  getCreateAccountToken
 }

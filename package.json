@@ -9,7 +9,7 @@
   "author": "artur@nostr.band",
   "license": "MIT",
   "dependencies": {
-    "@nostr-dev-kit/ndk": "^2.0.6",
+    "@nostr-dev-kit/ndk": "^2.4.0",
     "@prisma/client": "^5.6.0",
     "body-parser": "^1.20.2",
     "dotenv": "^16.3.1",
