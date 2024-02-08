@@ -15,8 +15,10 @@ const ndk = new NDK({
   explicitRelayUrls: ["wss://relay.nsec.app"],
 });
 
-const BUNKER_PUBKEY =
-  "44f9def756f8575aed604408a5c8f5a09d01633015fc65894fdd12af77457f3a";
+const LOCAL = false;
+const BUNKER_PUBKEY = LOCAL
+  ? "44f9def756f8575aed604408a5c8f5a09d01633015fc65894fdd12af77457f3a"
+  : "e24a86943d37a91ab485d6f9a7c66097c25ddd67e8bd1b75ed252a3c266cf9bb"
 
 const sk = generatePrivateKey();
 console.log("test pubkey", getPublicKey(sk));
@@ -97,7 +99,7 @@ signer.on("authUrl", async (url) => {
   await sendPostAuthd({ 
     sk, 
     method: 'POST',
-    url: 'http://localhost:8000/created',
+    url: LOCAL ? 'http://localhost:8000/created' : 'https://noauthd.nsec.app/created',
     body: JSON.stringify({
       npub: nip19.npubEncode(getPublicKey(sk)),
       token,
