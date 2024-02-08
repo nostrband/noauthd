@@ -977,8 +977,10 @@ class CreateAccountHandlingStrategy {
 
     if (domain !== BUNKER_DOMAIN) throw new Error("Bad domain");
 
+    const appNpub = nip19.npubEncode(remotePubkey);
+
     // format auth url
-    const url = `${BUNKER_ORIGIN}/create?name=${name}&token=${token}`;
+    const url = `${BUNKER_ORIGIN}/create?name=${name}&token=${token}&appNpub=${appNpub}`;
     console.log("sending auth_url", url, "to", remotePubkey);
     await backend.rpc.sendResponse(
       id,
@@ -1002,7 +1004,7 @@ class CreateAccountHandlingStrategy {
 
         // throw
         err("Timeout");
-      }, 60000)
+      }, 3600000)
     );
 
     // if tokenPromise resolves it returns the new pubkey
