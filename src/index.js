@@ -38,6 +38,7 @@ const MAX_BATCH_SIZE = 500; // pubkeys per sub
 const MIN_PAUSE = 5000; // 5 ms
 const MAX_PAUSE = 3600000; // 1 hour
 const MAX_DATA = 1 << 10; // 1kb
+const POW_PERIOD = 3600000; // 1h
 
 // global ndk
 const ndk = new NDK({
@@ -59,6 +60,7 @@ const sourcePsubs = new Map();
 const relayQueue = [];
 const npubData = new Map();
 const bunkerTokens = new Map();
+const ipNamePows = new Map();
 
 let bunkerSigner = null;
 
@@ -454,7 +456,26 @@ function getMinPow(name, req) {
   if (name.length <= 6) {
     minPow += 4;
   }
-  // FIXME check IP rate limits
+
+  const ip = req.ip
+
+  // have a record for this ip?
+  const { pow: lastPow = 0, tm = 0 } = ipNamePows.get(ip) || {};
+  console.log("minPow", { name, ip, lastPow, tm, headers: req.headers });
+  if (lastPow) {
+    // refill: reduce the pow threshold once per passed period
+    const age = Date.now() - tm;
+    const refill = Math.floor(age / POW_PERIOD);
+    lastPow -= refill;
+  }
+
+  // if have lastPow - increment it and return
+  if (lastPow && lastPow >= minPow) {
+    minPow = lastPow + 1
+  }
+
+  // add to table
+  ipNamePows.set(ip, { pow: minPow, tm: Date.now() });
 
   return minPow;
 }
