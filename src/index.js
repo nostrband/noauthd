@@ -457,7 +457,7 @@ function getMinPow(name, req) {
     minPow += 4;
   }
 
-  const ip = req.ip
+  const ip = req.header('x-real-ip')?.[0] || req.ip
 
   // have a record for this ip?
   const { pow: lastPow = 0, tm = 0 } = ipNamePows.get(ip) || {};
