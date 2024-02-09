@@ -451,13 +451,17 @@ function isValidName(name) {
   return REGEX.test(name);
 }
 
+function getIp(req) {
+  return req.header('x-real-ip') || req.ip;
+}
+
 function getMinPow(name, req) {
   let minPow = 14;
-  if (name.length <= 6) {
-    minPow += 4;
+  if (name.length <= 5) {
+    minPow += 3;
   }
 
-  const ip = req.header('x-real-ip') || req.ip
+  const ip = getIp(req);
 
   // have a record for this ip?
   let { pow: lastPow = 0, tm = 0 } = ipNamePows.get(ip) || {};
@@ -473,9 +477,6 @@ function getMinPow(name, req) {
   if (lastPow && lastPow >= minPow) {
     minPow = lastPow + 1
   }
-
-  // add to table
-  ipNamePows.set(ip, { pow: minPow, tm: Date.now() });
 
   return minPow;
 }
@@ -815,6 +816,9 @@ app.post(NAME_PATH, async (req, res) => {
       });
       return;
     }
+
+    // update minPow for this ip
+    ipNamePows.set(getIp(req), { pow: minPow, tm: Date.now() });
 
     // reply ok
     res.status(201).send({
