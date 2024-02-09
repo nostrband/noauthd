@@ -460,7 +460,7 @@ function getMinPow(name, req) {
   const ip = req.header('x-real-ip') || req.ip
 
   // have a record for this ip?
-  const { pow: lastPow = 0, tm = 0 } = ipNamePows.get(ip) || {};
+  let { pow: lastPow = 0, tm = 0 } = ipNamePows.get(ip) || {};
   console.log("minPow", { name, ip, lastPow, tm, headers: req.headers });
   if (lastPow) {
     // refill: reduce the pow threshold once per passed period
