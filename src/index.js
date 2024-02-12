@@ -5,7 +5,7 @@ const {
   NDKRelaySet,
   NDKRelay,
   NDKPrivateKeySigner,
-  NDKNip46Backend
+  NDKNip46Backend,
 } = require("@nostr-dev-kit/ndk");
 const { createHash } = require("node:crypto");
 const express = require("express");
@@ -452,7 +452,7 @@ function isValidName(name) {
 }
 
 function getIp(req) {
-  return req.header('x-real-ip') || req.ip;
+  return req.header("x-real-ip") || req.ip;
 }
 
 function getMinPow(name, req) {
@@ -475,7 +475,7 @@ function getMinPow(name, req) {
 
   // if have lastPow - increment it and return
   if (lastPow && lastPow >= minPow) {
-    minPow = lastPow + 1
+    minPow = lastPow + 1;
   }
 
   return minPow;
@@ -1051,12 +1051,31 @@ async function startBunker() {
   console.log("starting bunker");
 }
 
-// start bunker 
-ndk.connect().then(startBunker);
+console.log(process.argv);
+if (process.argv.length >= 3) {
+  if (process.argv[2] === "list_names") {
+    prisma.names.findMany().then((names) => {
+      for (const n of names) console.log(n.id, n.name, n.npub, n.timestamp);
+    });
+  } else if (process.argv[2] === 'delete_name') {
+    if (process.argv.length < 4) {
+      console.log("enter name");
+      return;
+    }
+    const name = process.argv[3];
+    prisma.names.delete({ where: { name } }).then((r) => {
+      console.log("deleted", name, r);
+    });
+  }
 
-// start server
-loadFromDb().then(() => {
-  app.listen(port, () => {
-    console.log(`Listening on port ${port}!`);
+} else {
+  // start bunker
+  ndk.connect().then(startBunker);
+
+  // start server
+  loadFromDb().then(() => {
+    app.listen(port, () => {
+      console.log(`Listening on port ${port}!`);
+    });
   });
-});
+}
