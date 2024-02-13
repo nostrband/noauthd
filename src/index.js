@@ -801,6 +801,22 @@ app.post(NAME_PATH, async (req, res) => {
       return;
     }
 
+    const names = await prisma.names.findMany({
+      where: {
+        npub,
+        name
+      },
+    });
+    const alreadyAssigned = names.find((n) => n.name === name);
+    if (alreadyAssigned) {
+      console.log("Name", name, "already assigned to", npub);
+      // reply ok
+      res.status(200).send({
+        ok: true,
+      });
+      return;
+    }
+
     try {
       const dbr = await prisma.names.create({
         data: {
@@ -1057,7 +1073,7 @@ if (process.argv.length >= 3) {
     prisma.names.findMany().then((names) => {
       for (const n of names) console.log(n.id, n.name, n.npub, n.timestamp);
     });
-  } else if (process.argv[2] === 'delete_name') {
+  } else if (process.argv[2] === "delete_name") {
     if (process.argv.length < 4) {
       console.log("enter name");
       return;
@@ -1067,7 +1083,6 @@ if (process.argv.length >= 3) {
       console.log("deleted", name, r);
     });
   }
-
 } else {
   // start bunker
   ndk.connect().then(startBunker);
