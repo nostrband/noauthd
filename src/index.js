@@ -906,6 +906,7 @@ app.get(JSON_PATH, async (req, res) => {
     if (rec) {
       const { data: pubkey } = nip19.decode(rec.npub);
       data.names[rec.name] = pubkey;
+      data.nip46[pubkey] = [BUNKER_RELAY];
     }
 
     res.status(200).send(data);
