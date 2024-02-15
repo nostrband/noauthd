@@ -804,7 +804,7 @@ app.post(NAME_PATH, async (req, res) => {
     const names = await prisma.names.findMany({
       where: {
         npub,
-        name
+        name,
       },
     });
     const alreadyAssigned = names.find((n) => n.name === name);
@@ -1073,6 +1073,7 @@ if (process.argv.length >= 3) {
     prisma.names.findMany().then((names) => {
       for (const n of names) console.log(n.id, n.name, n.npub, n.timestamp);
     });
+    return;
   } else if (process.argv[2] === "delete_name") {
     if (process.argv.length < 4) {
       console.log("enter name");
@@ -1082,15 +1083,16 @@ if (process.argv.length >= 3) {
     prisma.names.delete({ where: { name } }).then((r) => {
       console.log("deleted", name, r);
     });
+    return;
   }
-} else {
-  // start bunker
-  ndk.connect().then(startBunker);
-
-  // start server
-  loadFromDb().then(() => {
-    app.listen(port, () => {
-      console.log(`Listening on port ${port}!`);
-    });
-  });
 }
+
+// start bunker
+ndk.connect().then(startBunker);
+
+// start server
+loadFromDb().then(() => {
+  app.listen(port, () => {
+    console.log(`Listening on port ${port}!`);
+  });
+});
