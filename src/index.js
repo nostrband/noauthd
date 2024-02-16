@@ -35,7 +35,7 @@ const port = 8000;
 const EMAIL = "artur@nostr.band"; // admin email
 const MAX_RELAYS = 3; // no more than 3 relays monitored per pubkey
 const MAX_BATCH_SIZE = 500; // pubkeys per sub
-const MIN_PAUSE = 5000; // 5 ms
+const MIN_PAUSE = 1000; // 1 sec
 const MAX_PAUSE = 3600000; // 1 hour
 const MAX_DATA = 1 << 10; // 1kb
 const POW_PERIOD = 3600000; // 1h
@@ -447,7 +447,7 @@ function digest(algo, data) {
 }
 
 function isValidName(name) {
-  const REGEX = /^[a-z0-9_]{3,128}$/;
+  const REGEX = /^[a-z0-9_-.]{2,128}$/;
   return REGEX.test(name);
 }
 
