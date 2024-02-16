@@ -447,7 +447,7 @@ function digest(algo, data) {
 }
 
 function isValidName(name) {
-  const REGEX = /^[a-z0-9_-.]{2,128}$/;
+  const REGEX = /^[a-z0-9_\-.]{2,128}$/;
   return REGEX.test(name);
 }
 
