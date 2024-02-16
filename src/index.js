@@ -781,15 +781,6 @@ app.post(NAME_PATH, async (req, res) => {
       return;
     }
 
-    const { type } = nip19.decode(npub);
-    if (type !== "npub") {
-      console.log("bad npub", npub);
-      res.status(400).send({
-        error: "Bad npub",
-      });
-      return;
-    }
-
     const minPow = getMinPow(name, req);
 
     if (!(await verifyAuthNostr(req, npub, NAME_PATH, minPow))) {
@@ -875,6 +866,104 @@ app.get(NAME_PATH, async (req, res) => {
     });
   }
 });
+
+app.delete(NAME_PATH, async (req, res) => {
+  try {
+    const { npub, name } = req.body;
+
+    if (!(await verifyAuthNostr(req, npub, NAME_PATH))) {
+      console.log("auth failed", npub);
+      res.status(403).send({
+        error: `Bad auth`
+      });
+      return;
+    }
+
+    try {
+      const deletedName = await prisma.names.delete({
+        where: {
+          npub,
+          name,
+        },
+      });
+      console.log({ deletedName });
+    } catch (e) {
+      console.log("Failed to delete name", name, npub);
+      res.status(404).send({
+        error: "Name not found",
+      });
+      return;
+    }
+
+    // reply ok
+    res.status(200).send({
+      ok: true,
+    });
+  } catch (e) {
+    console.log(new Date(), "error req from ", req.ip, e.toString());
+    res.status(500).send({
+      error: "Internal error",
+    });
+  }
+});
+
+app.put(NAME_PATH, async (req, res) => {
+  try {
+    const { npub, name, newNpub } = req.body;
+
+    if (!(await verifyAuthNostr(req, npub, NAME_PATH))) {
+      console.log("auth failed", npub);
+      res.status(403).send({
+        error: `Bad auth`
+      });
+      return;
+    }
+
+    try {
+      const deletedName = await prisma.names.delete({
+        where: {
+          npub,
+          name,
+        },
+      });
+      console.log({ deletedName });
+    } catch (e) {
+      console.log("Failed to delete name", name, npub);
+      res.status(404).send({
+        error: "Name not found",
+      });
+      return;
+    }
+
+    try {
+      const dbr = await prisma.names.create({
+        data: {
+          npub: newNpub,
+          name,
+          timestamp: Date.now(),
+        },
+      });
+      console.log({ dbr });
+    } catch (e) {
+      res.status(400).send({
+        error: "Name taken",
+      });
+      return;
+    }
+
+    // reply ok
+    res.status(201).send({
+      ok: true,
+    });
+
+  } catch (e) {
+    console.log(new Date(), "error req from ", req.ip, e.toString());
+    res.status(500).send({
+      error: "Internal error",
+    });
+  }
+});
+
 
 const JSON_PATH = "/.well-known/nostr.json";
 app.get(JSON_PATH, async (req, res) => {
