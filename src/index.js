@@ -911,6 +911,15 @@ app.put(NAME_PATH, async (req, res) => {
   try {
     const { npub, name, newNpub } = req.body;
 
+    const { type } = nip19.decode(newNpub);
+    if (type !== "npub") {
+      console.log("bad new npub", newNpub);
+      res.status(400).send({
+        error: "Bad new npub",
+      });
+      return;
+    }
+
     if (!(await verifyAuthNostr(req, npub, NAME_PATH))) {
       console.log("auth failed", npub);
       res.status(403).send({
