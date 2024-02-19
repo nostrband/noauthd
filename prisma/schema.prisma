@@ -30,6 +30,7 @@ model Names {
   name      String @unique
   npub      String
   timestamp BigInt
+  disabled  Int    @default(0)
 
   @@index([npub])
 }

@@ -801,8 +801,24 @@ app.post(NAME_PATH, async (req, res) => {
     const alreadyAssigned = names.find((n) => n.name === name);
     if (alreadyAssigned) {
       console.log("Name", name, "already assigned to", npub);
+
+      const status = alreadyAssigned.disabled ? 201 : 200;
+      if (alreadyAssigned.disabled) {
+        const dbr = await prisma.names.update({
+          where: {
+            npub,
+            name
+          },
+          data: {
+            timestamp: Date.now(),
+            disabled: 0
+          },
+        });
+        console.log("Name", name, "activated for", npub, { dbr });
+      }
+
       // reply ok
-      res.status(200).send({
+      res.status(status).send({
         ok: true,
       });
       return;
@@ -855,7 +871,7 @@ app.get(NAME_PATH, async (req, res) => {
     console.log("npub", npub, recs);
 
     const data = {
-      names: recs.map((r) => r.name),
+      names: recs.filter((r) => !r.disabled).map((r) => r.name),
     };
 
     res.status(200).send(data);
@@ -874,7 +890,7 @@ app.delete(NAME_PATH, async (req, res) => {
     if (!(await verifyAuthNostr(req, npub, NAME_PATH))) {
       console.log("auth failed", npub);
       res.status(403).send({
-        error: `Bad auth`
+        error: `Bad auth`,
       });
       return;
     }
@@ -923,7 +939,7 @@ app.put(NAME_PATH, async (req, res) => {
     if (!(await verifyAuthNostr(req, npub, NAME_PATH))) {
       console.log("auth failed", npub);
       res.status(403).send({
-        error: `Bad auth`
+        error: `Bad auth`,
       });
       return;
     }
@@ -950,6 +966,7 @@ app.put(NAME_PATH, async (req, res) => {
           npub: newNpub,
           name,
           timestamp: Date.now(),
+          disabled: 1,
         },
       });
       console.log({ dbr });
@@ -964,7 +981,6 @@ app.put(NAME_PATH, async (req, res) => {
     res.status(201).send({
       ok: true,
     });
-
   } catch (e) {
     console.log(new Date(), "error req from ", req.ip, e.toString());
     res.status(500).send({
@@ -972,7 +988,6 @@ app.put(NAME_PATH, async (req, res) => {
     });
   }
 });
-
 
 const JSON_PATH = "/.well-known/nostr.json";
 app.get(JSON_PATH, async (req, res) => {
@@ -1001,7 +1016,7 @@ app.get(JSON_PATH, async (req, res) => {
     });
     console.log("name", name, rec);
 
-    if (rec) {
+    if (rec && !rec.disabled) {
       const { data: pubkey } = nip19.decode(rec.npub);
       data.names[rec.name] = pubkey;
       data.nip46[pubkey] = [BUNKER_RELAY];
