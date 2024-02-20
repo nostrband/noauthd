@@ -10,7 +10,7 @@ const {
 const { createHash } = require("node:crypto");
 const express = require("express");
 const bodyParser = require("body-parser");
-const { nip19, getPublicKey } = require("nostr-tools");
+const { nip19, getPublicKey, verifySignature } = require("nostr-tools");
 const {
   makePwh2,
   countLeadingZeros,
@@ -1167,9 +1167,52 @@ class CreateAccountHandlingStrategy {
   }
 }
 
+// copycat of ndk's implementations with one exception:
+// it ignores the unknown methods (except create_account)
+class Nip46Backend extends NDKNip46Backend {
+  constructor(ndk, signer) {
+    super(ndk, signer, () => Promise.resolve(true))
+    signer.user().then((u) => (this.npub = nip19.npubEncode(u.pubkey)))
+  }
+
+  async handleIncomingEvent(event) {
+    const { id, method, params } = await this.rpc.parseEvent(event)
+    const remotePubkey = event.pubkey
+    let response
+
+    // validate signature explicitly
+    if (!verifySignature(event.rawEvent())) {
+      this.debug('invalid signature', event.rawEvent())
+      return
+    }
+
+    const strategy = this.handlers[method]
+    if (strategy) {
+      try {
+        response = await strategy.handle(this, id, remotePubkey, params)
+        console.log(Date.now(), 'req', id, 'method', method, 'result', response)
+      } catch (e) {
+        this.debug('error handling event', e, { id, method, params })
+        this.rpc.sendResponse(id, remotePubkey, 'error', undefined, e.message)
+      }
+    } else {
+      this.debug('unsupported method', { method, params })
+      // ignore unsupported methods
+      return;
+    }
+
+    if (response) {
+      this.debug(`sending response to ${remotePubkey}`, response)
+      this.rpc.sendResponse(id, remotePubkey, response)
+    } else {
+      this.rpc.sendResponse(id, remotePubkey, 'error', undefined, 'Not authorized')
+    }
+  }
+}
+
 async function startBunker() {
   const { data: bunkerSk } = nip19.decode(BUNKER_NSEC);
-  bunkerSigner = new NDKNip46Backend(
+  bunkerSigner = new Nip46Backend(
     ndk,
     new NDKPrivateKeySigner(bunkerSk),
     () => true

@@ -193,16 +193,28 @@ if (process.argv.length >= 3) {
       console.log("transferred")
       await sendPostAuthd({
         sk: sk1,
-        method: "DELETE",
+        method: "POST",
         url: LOCAL
           ? "http://localhost:8000/name"
           : "https://noauthd.nsec.app/name",
         body: JSON.stringify({
           npub: npub1,
-          name: name,
+          name,
         }),
+        pow: 16
       });
-      console.log("deleted");
+      // await sendPostAuthd({
+      //   sk: sk1,
+      //   method: "DELETE",
+      //   url: LOCAL
+      //     ? "http://localhost:8000/name"
+      //     : "https://noauthd.nsec.app/name",
+      //   body: JSON.stringify({
+      //     npub: npub1,
+      //     name: name,
+      //   }),
+      // });
+      // console.log("deleted");
     }
     test()
   }
