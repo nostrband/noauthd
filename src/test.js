@@ -222,6 +222,8 @@ if (process.argv.length >= 3) {
   const params = [
     "test",
     "nsec.app",
+    "",
+    "sign_event:4"
     // email?
   ];
   ndk

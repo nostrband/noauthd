@@ -1128,14 +1128,14 @@ class CreateAccountHandlingStrategy {
     const token = getCreateAccountToken();
 
     // params
-    const [name = "", domain = ""] = params;
+    const [name = "", domain = "", email = "", perms = ""] = params;
 
     if (domain !== BUNKER_DOMAIN) throw new Error("Bad domain");
 
     const appNpub = nip19.npubEncode(remotePubkey);
 
     // format auth url
-    const url = `${BUNKER_ORIGIN}/create?name=${name}&token=${token}&appNpub=${appNpub}`;
+    const url = `${BUNKER_ORIGIN}/create?name=${name}&token=${token}&appNpub=${appNpub}&perms=${perms}&email=${email}`;
     console.log("sending auth_url", url, "to", remotePubkey);
     await backend.rpc.sendResponse(
       id,
