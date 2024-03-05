@@ -73,7 +73,7 @@ async function push(psub) {
     psub.id
   );
   try {
-    await webpush.sendNotification(
+    const r = await webpush.sendNotification(
       psub.pushSubscription,
       JSON.stringify(
         {
@@ -87,6 +87,7 @@ async function push(psub) {
         }
       )
     );
+    console.log("push sent for", psub.pubkey, r);
   } catch (e) {
     console.log(
       new Date(),
