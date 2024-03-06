@@ -993,6 +993,8 @@ app.get(JSON_PATH, async (req, res) => {
         _: bunkerPubkey,
       },
       nip46: {},
+      // FIXME remove when ndk is fixed
+      relays: {},
     };
     data.nip46[bunkerPubkey] = [BUNKER_RELAY];
 
@@ -1013,6 +1015,7 @@ app.get(JSON_PATH, async (req, res) => {
       const { data: pubkey } = nip19.decode(rec.npub);
       data.names[rec.name] = pubkey;
       data.nip46[pubkey] = [BUNKER_RELAY];
+      data.relays[pubkey] = [BUNKER_RELAY];
     }
 
     res.status(200).send(data);
