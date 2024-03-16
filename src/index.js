@@ -1172,6 +1172,8 @@ class Nip46Backend extends NDKNip46Backend {
   }
 
   async handleIncomingEvent(event) {
+    if (event.created_at < Date.now() / 1000 - 10) return;
+
     const { id, method, params } = await this.rpc.parseEvent(event);
     const remotePubkey = event.pubkey;
     let response;
