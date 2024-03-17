@@ -331,7 +331,7 @@ function createPubkeySub(r) {
     [requestFilter, replyFilter],
     {
       closeOnEose: false,
-      subId: `pubkeys_${Date.now()}_${pubkeys.length}`,
+      subId: `pubkeys_${Math.random()}`,
     },
     NDKRelaySet.fromRelayUrls([r.url], ndk),
     /* autoStart */ false
