@@ -39,6 +39,7 @@ const MIN_PAUSE = 1000; // 1 sec
 const MAX_PAUSE = 3600000; // 1 hour
 const MAX_DATA = 1 << 10; // 1kb
 const POW_PERIOD = 3600000; // 1h
+const MIN_POW = 11;
 
 // global ndk
 const ndk = new NDK({
@@ -445,7 +446,7 @@ function getIp(req) {
 }
 
 function getMinPow(name, req) {
-  let minPow = 14;
+  let minPow = MIN_POW;
   if (name.length <= 5) {
     minPow += 3;
   }
@@ -517,6 +518,10 @@ async function verifyAuthNostr(req, npub, path, minPow = 0) {
     } else if (payload) {
       return false;
     }
+
+    // finally after all cheap checks are done,
+    // verify the signature
+    if (!verifySignature(event)) return false;
 
     return true;
   } catch (e) {
