@@ -519,6 +519,10 @@ async function verifyAuthNostr(req, npub, path, minPow = 0) {
       return false;
     }
 
+    // finally after all cheap checks are done,
+    // verify the signature
+    if (!verifySignature(event)) return false;
+
     return true;
   } catch (e) {
     console.log("auth error", e);
