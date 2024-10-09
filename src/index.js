@@ -997,7 +997,9 @@ app.get(JSON_PATH, async (req, res) => {
       names: {
         _: bunkerPubkey,
       },
-      nip46: {},
+      nip46: {
+        iframe_url: BUNKER_ORIGIN+"/iframe",
+      },
       // FIXME remove when ndk is fixed
       relays: {},
     };
